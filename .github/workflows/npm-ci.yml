@@ -9,6 +9,11 @@ on:
         default: '20'
         type: string
 
+      build-order:
+        description: 'JSON array of package paths to build in order'
+        required: false
+        type: string
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -26,7 +31,15 @@ jobs:
         run: npm install
 
       - name: Build packages
-        run: npm run build --workspaces --if-present
+        run: |
+          if [ -n "${{ inputs.build-order }}" ]; then
+            echo "${{ inputs.build-order }}" | jq -r '.[]' | while read path; do
+              echo "Building $path"
+              npm run build -w "$path" || true
+            done
+          else
+            npm run build --workspaces --if-present
+          fi
 
       - name: Run tests
         run: npm test --workspaces --if-present

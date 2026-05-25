@@ -12,6 +12,10 @@ on:
         description: 'JSON array of package paths to publish'
         required: true
         type: string
+      build-order:
+        description: 'JSON array of package paths in build order (defaults to package-paths)'
+        required: false
+        type: string
     secrets:
       npm-token:
         description: 'NPM authentication token'
@@ -39,8 +43,11 @@ jobs:
 
       - name: Build packages
         run: |
-          PATHS='${{ inputs.package-paths }}'
-          echo "$PATHS" | jq -r '.[]' | while read path; do
+          BUILD_ORDER='${{ inputs.build-order }}'
+          if [ -z "$BUILD_ORDER" ]; then
+            BUILD_ORDER='${{ inputs.package-paths }}'
+          fi
+          echo "$BUILD_ORDER" | jq -r '.[]' | while read path; do
             echo "Building $path"
             npm run build -w "$path" || true
           done
