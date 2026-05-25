@@ -1,0 +1,56 @@
+name: Publish NPM Packages
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: 'Node.js version'
+        required: false
+        default: '20'
+        type: string
+      package-paths:
+        description: 'JSON array of package paths to publish'
+        required: true
+        type: string
+    secrets:
+      npm-token:
+        description: 'NPM authentication token'
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@Grupo-ProSolid'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build packages
+        run: |
+          PATHS='${{ inputs.package-paths }}'
+          echo "$PATHS" | jq -r '.[]' | while read path; do
+            echo "Building $path"
+            npm run build -w "$path" || true
+          done
+
+      - name: Publish packages
+        run: |
+          PATHS='${{ inputs.package-paths }}'
+          echo "$PATHS" | jq -r '.[]' | while read path; do
+            echo "Publishing $path"
+            npm publish -w "$path" --access public || true
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
