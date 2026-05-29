@@ -51,7 +51,11 @@ jobs:
           fi
           echo "$BUILD_ORDER" | jq -r '.[]' | while read path; do
             echo "Building $path"
-            npm run build -w "$path" || true
+            if [ "$path" = "." ]; then
+              npm run build || true
+            else
+              npm run build -w "$path" || true
+            fi
           done
 
       - name: Publish packages
@@ -59,7 +63,11 @@ jobs:
           PATHS='${{ inputs.package-paths }}'
           echo "$PATHS" | jq -r '.[]' | while read path; do
             echo "Publishing $path"
-            npm publish -w "$path" --access public || true
+            if [ "$path" = "." ]; then
+              npm publish --access public || true
+            else
+              npm publish -w "$path" --access public || true
+            fi
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
