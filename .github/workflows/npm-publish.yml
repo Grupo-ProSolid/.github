@@ -45,6 +45,7 @@ jobs:
 
       - name: Build packages
         run: |
+          set -e
           BUILD_ORDER='${{ inputs.build-order }}'
           if [ -z "$BUILD_ORDER" ]; then
             BUILD_ORDER='${{ inputs.package-paths }}'
@@ -52,9 +53,9 @@ jobs:
           echo "$BUILD_ORDER" | jq -r '.[]' | while read path; do
             echo "Building $path"
             if [ "$path" = "." ]; then
-              npm run build || true
+              npm run build
             else
-              npm run build -w "$path" || true
+              npm run build -w "$path"
             fi
           done
 
@@ -64,9 +65,9 @@ jobs:
           echo "$PATHS" | jq -r '.[]' | while read path; do
             echo "Publishing $path"
             if [ "$path" = "." ]; then
-              npm publish --access public || true
+              npm publish --access public
             else
-              npm publish -w "$path" --access public || true
+              npm publish -w "$path" --access public
             fi
           done
         env:
