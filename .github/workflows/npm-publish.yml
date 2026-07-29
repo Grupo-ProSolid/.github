@@ -16,6 +16,11 @@ on:
         description: 'JSON array of package paths in build order (defaults to package-paths)'
         required: false
         type: string
+      ignore-conflict:
+        description: 'If true, ignores publication errors (e.g., 409 Version Conflict) and continues'
+        required: false
+        default: false
+        type: boolean
     secrets:
       npm-token:
         description: 'NPM authentication token'
@@ -62,12 +67,28 @@ jobs:
       - name: Publish packages
         run: |
           PATHS='${{ inputs.package-paths }}'
+          IGNORE_CONFLICT="${{ inputs.ignore-conflict }}"
+
           echo "$PATHS" | jq -r '.[]' | while read path; do
             echo "Publishing $path"
+            
+            # Preparamos el comando según el path
             if [ "$path" = "." ]; then
-              npm publish --access public
+              CMD="npm publish --access public"
             else
-              npm publish -w "$path" --access public
+              CMD="npm publish -w \"$path\" --access public"
+            fi
+
+            # Ejecutamos evaluando si debemos omitir el error de versión existente
+            if eval "$CMD"; then
+              echo "✅ Successfully published $path"
+            else
+              if [ "$IGNORE_CONFLICT" = "true" ]; then
+                echo "⚠️ Failed to publish $path (likely version conflict / 409). Skipping as ignore-conflict is enabled."
+              else
+                echo "❌ Failed to publish $path."
+                exit 1
+              fi
             fi
           done
         env:
