@@ -17,7 +17,12 @@ on:
         required: false
         type: string
       ignore-conflict:
-        description: 'If true, ignores publication errors (e.g., 409 Version Conflict) and continues'
+        description: 'If true, a package whose version is already published is skipped instead of failing the run'
+        required: false
+        default: false
+        type: boolean
+      dry-run:
+        description: 'If true, builds and resolves versions but publishes nothing'
         required: false
         default: false
         type: boolean
@@ -43,19 +48,76 @@ jobs:
           registry-url: 'https://npm.pkg.github.com'
           scope: '@Grupo-ProSolid'
 
+      # Antes de construir nada: decidir qué se publica y qué no.
+      #
+      # Antes el workflow publicaba siempre y dejaba que el registro
+      # respondiera 409 si la versión ya existía. Con ignore-conflict activo
+      # eso se tragaba CUALQUIER fallo de publicación, no solo el conflicto de
+      # versión: unas credenciales malas o un tarball roto pasaban por "ya
+      # publicado". Ahora la comprobación es explícita, y un fallo real de
+      # `npm publish` rompe el run siempre.
+      - name: Resolve what to publish
+        id: plan
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
+          PACKAGE_PATHS: ${{ inputs.package-paths }}
+          IGNORE_CONFLICT: ${{ inputs.ignore-conflict }}
+        run: |
+          set -euo pipefail
+          to_publish=""
+          skipped=""
+          conflict=0
+
+          for path in $(echo "$PACKAGE_PATHS" | jq -r '.[]'); do
+            name=$(jq -r .name "$path/package.json")
+            version=$(jq -r .version "$path/package.json")
+
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              if [ "$IGNORE_CONFLICT" = "true" ]; then
+                echo "⏭  $name@$version ya está publicado, se omite"
+                skipped="$skipped $name@$version"
+              else
+                echo "::error::$name@$version ya está publicado. Sube la versión, o relanza con ignore-conflict."
+                conflict=1
+              fi
+              continue
+            fi
+
+            echo "→ $name@$version se publicará"
+            to_publish="$to_publish $path"
+          done
+
+          if [ $conflict -ne 0 ]; then
+            exit 1
+          fi
+
+          if [ -z "$to_publish" ]; then
+            echo "Nada que publicar."
+          fi
+
+          {
+            echo "paths=$(echo $to_publish)"
+            echo "skipped=$(echo $skipped)"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Install dependencies
         run: npm install --no-package-lock --legacy-peer-deps
         env:
           NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
 
       - name: Build packages
+        env:
+          BUILD_ORDER: ${{ inputs.build-order }}
+          PACKAGE_PATHS: ${{ inputs.package-paths }}
         run: |
-          set -e
-          BUILD_ORDER='${{ inputs.build-order }}'
-          if [ -z "$BUILD_ORDER" ]; then
-            BUILD_ORDER='${{ inputs.package-paths }}'
+          set -euo pipefail
+          order="$BUILD_ORDER"
+          if [ -z "$order" ]; then
+            order="$PACKAGE_PATHS"
           fi
-          echo "$BUILD_ORDER" | jq -r '.[]' | while read path; do
+          # Se construye SIEMPRE todo el build-order, aunque algún paquete no
+          # se vaya a publicar: el que sí se publica puede depender de su dist.
+          for path in $(echo "$order" | jq -r '.[]'); do
             echo "Building $path"
             if [ "$path" = "." ]; then
               npm run build
@@ -65,31 +127,42 @@ jobs:
           done
 
       - name: Publish packages
-        run: |
-          PATHS='${{ inputs.package-paths }}'
-          IGNORE_CONFLICT="${{ inputs.ignore-conflict }}"
-
-          echo "$PATHS" | jq -r '.[]' | while read path; do
-            echo "Publishing $path"
-            
-            # Preparamos el comando según el path
-            if [ "$path" = "." ]; then
-              CMD="npm publish --access public"
-            else
-              CMD="npm publish -w \"$path\" --access public"
-            fi
-
-            # Ejecutamos evaluando si debemos omitir el error de versión existente
-            if eval "$CMD"; then
-              echo "✅ Successfully published $path"
-            else
-              if [ "$IGNORE_CONFLICT" = "true" ]; then
-                echo "⚠️ Failed to publish $path (likely version conflict / 409). Skipping as ignore-conflict is enabled."
-              else
-                echo "❌ Failed to publish $path."
-                exit 1
-              fi
-            fi
-          done
+        if: steps.plan.outputs.paths != ''
         env:
           NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
+          PATHS: ${{ steps.plan.outputs.paths }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          for path in $PATHS; do
+            name=$(jq -r .name "$path/package.json")
+            version=$(jq -r .version "$path/package.json")
+
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "🧪 dry-run: $name@$version NO se publica"
+              continue
+            fi
+
+            echo "Publishing $name@$version"
+            if [ "$path" = "." ]; then
+              npm publish --access public
+            else
+              npm publish -w "$path" --access public
+            fi
+            echo "✅ $name@$version publicado"
+          done
+
+      - name: Summary
+        if: always()
+        env:
+          PUBLISHED: ${{ steps.plan.outputs.paths }}
+          SKIPPED: ${{ steps.plan.outputs.skipped }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          {
+            echo "### Publicación"
+            if [ "$DRY_RUN" = "true" ]; then echo "_dry-run: no se publicó nada_"; fi
+            echo ""
+            echo "- Publicados: ${PUBLISHED:-ninguno}"
+            echo "- Omitidos (ya publicados): ${SKIPPED:-ninguno}"
+          } >> "$GITHUB_STEP_SUMMARY"
