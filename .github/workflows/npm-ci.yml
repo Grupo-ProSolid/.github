@@ -6,7 +6,7 @@ on:
       node-version:
         description: 'Node.js version'
         required: false
-        default: '20'
+        default: '22'
         type: string
 
       build-order:
@@ -14,34 +14,66 @@ on:
         required: false
         type: string
 
+      typecheck:
+        description: 'Run `npm run typecheck` after the build when the script exists'
+        required: false
+        default: true
+        type: boolean
+
+    secrets:
+      npm-token:
+        description: 'Token con permiso de lectura en GitHub Packages, para las deps @grupo-prosolid'
+        required: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # registry-url + scope son obligatorios para que NODE_AUTH_TOKEN sirva de
+      # algo: sin ellos, npm no manda el token a npm.pkg.github.com y cualquier
+      # dependencia @grupo-prosolid privada falla con 404.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
-          cache: 'npm'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@Grupo-ProSolid'
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-package-lock --legacy-peer-deps
         env:
           NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
 
+      # Sin `|| true`: un build roto tiene que poner el check en rojo. Con él,
+      # esta CI daba verde sobre código que no compila, que es peor que no
+      # tener CI — da confianza falsa.
       - name: Build packages
+        env:
+          BUILD_ORDER: ${{ inputs.build-order }}
         run: |
-          if [ -n "${{ inputs.build-order }}" ]; then
-            echo "${{ inputs.build-order }}" | jq -r '.[]' | while read path; do
+          set -euo pipefail
+          if [ -n "$BUILD_ORDER" ]; then
+            for path in $(echo "$BUILD_ORDER" | jq -r '.[]'); do
               echo "Building $path"
-              npm run build -w "$path" || true
+              if [ "$path" = "." ]; then
+                npm run build
+              else
+                npm run build -w "$path"
+              fi
             done
           else
             npm run build --workspaces --if-present
           fi
 
+      - name: Typecheck
+        if: inputs.typecheck
+        run: npm run typecheck --workspaces --if-present --include-workspace-root
+
       - name: Run tests
-        run: npm test --workspaces --if-present
+        run: npm test --workspaces --if-present --include-workspace-root
