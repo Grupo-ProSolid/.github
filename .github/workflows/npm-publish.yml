@@ -26,6 +26,11 @@ on:
         required: false
         default: false
         type: boolean
+      tag:
+        description: 'dist-tag de npm publish. Vacío = se deriva de la versión (X.Y.Z-<preid>.N → <preid>; estable → latest)'
+        required: false
+        default: ''
+        type: string
     secrets:
       npm-token:
         description: 'NPM authentication token'
@@ -132,6 +137,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
           PATHS: ${{ steps.plan.outputs.paths }}
           DRY_RUN: ${{ inputs.dry-run }}
+          TAG_INPUT: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           for path in $PATHS; do
@@ -143,11 +149,22 @@ jobs:
               continue
             fi
 
-            echo "Publishing $name@$version"
+            # Sin --tag, npm publica en `latest` también los prereleases: así
+            # acabó 0.1.0-cdn-test.0 del loader como `latest`.
+            tag="$TAG_INPUT"
+            if [ -z "$tag" ]; then
+              pre=$(printf '%s' "$version" | sed -nE 's/^[0-9]+\.[0-9]+\.[0-9]+-([0-9A-Za-z-]+)(\..*)?$/\1/p')
+              case "$pre" in
+                "") tag="latest" ;;
+                *[!0-9]*) tag="$pre" ;;
+                *) tag="next" ;;  # preid numérico: npm no acepta un tag que parece un rango
+              esac
+            fi
+            echo "Publishing $name@$version (--tag $tag)"
             if [ "$path" = "." ]; then
-              npm publish --access public
+              npm publish --access public --tag "$tag"
             else
-              npm publish -w "$path" --access public
+              npm publish -w "$path" --access public --tag "$tag"
             fi
             echo "✅ $name@$version publicado"
           done
